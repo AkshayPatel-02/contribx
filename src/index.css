@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 220 25% 97%;
+    --foreground: 230 30% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 230 30% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 30% 15%;
+
+    --primary: 177 41% 49%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 92%;
+    --secondary-foreground: 230 30% 15%;
+
+    --muted: 220 15% 92%;
+    --muted-foreground: 230 15% 45%;
+
+    --accent: 190 42% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+    --info: 199 89% 48%;
+
+    --border: 220 15% 88%;
+    --input: 220 15% 88%;
+    --ring: 250 70% 60%;
+
+    --radius: 0.75rem;
+
+    --gradient-primary: linear-gradient(135deg, hsl(177, 41%, 49%), hsl(190, 42%, 19%));
+    --gradient-hero: linear-gradient(180deg, hsl(177, 41%, 49%) 0%, hsl(190, 42%, 19%) 100%);
+    
+    --shadow-card: 0 2px 8px -2px hsl(230 30% 15% / 0.08);
+    --shadow-elevated: 0 8px 24px -8px hsl(230 30% 15% / 0.12);
+    
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .dark {
+    --background: 230 35% 8%;
+    --foreground: 220 15% 95%;
+
+    --card: 230 30% 12%;
+    --card-foreground: 220 15% 95%;
+
+    --popover: 230 30% 12%;
+    --popover-foreground: 220 15% 95%;
+
+    --primary: 177 41% 49%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 230 25% 18%;
+    --secondary-foreground: 220 15% 95%;
+
+    --muted: 230 25% 18%;
+    --muted-foreground: 220 15% 65%;
+
+    --accent: 190 42% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
+    --info: 199 89% 48%;
+
+    --border: 230 25% 20%;
+    --input: 230 25% 20%;
+    --ring: 250 70% 60%;
+    
+    --shadow-card: 0 2px 8px -2px hsl(0 0% 0% / 0.3);
+    --shadow-elevated: 0 8px 24px -8px hsl(0 0% 0% / 0.5);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .card-hover-optimized {
+    will-change: box-shadow;
+    backface-visibility: hidden;
+    transform: translateZ(0);
+  }
+}
