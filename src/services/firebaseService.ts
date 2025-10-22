@@ -209,44 +209,60 @@ export const occupyIssueTransaction = async (
   teamName: string
 ): Promise<{ success: boolean; error?: string }> => {
   try {
+    const start = Date.now();
+
+    // Pre-check how many issues this team currently has occupied (do this OUTSIDE the transaction to reduce transaction time)
+    const issuesCol = collection(db, COLLECTIONS.ISSUES);
+    const teamIssuesQuery = query(
+      issuesCol,
+      where('assignedTo', '==', teamName),
+      where('status', '==', 'occupied')
+    );
+
+    const tPre = Date.now();
+    const teamIssuesSnapshot = await getDocs(teamIssuesQuery);
+    console.log('[TRACE] occupyIssueTransaction: pre-getDocs(teamIssuesQuery) took', Date.now() - tPre, 'ms', 'size=', teamIssuesSnapshot.size);
+    try {
+      const ids = teamIssuesSnapshot.docs.map(d => d.id).slice(0, 10);
+      console.log('[TRACE] occupyIssueTransaction: team occupied ids sample=', ids);
+    } catch (err) {}
+
+    if (teamIssuesSnapshot.size >= 3) {
+      return { success: false, error: 'Your team has already occupied 3 issues. Please close an issue before occupying a new one.' };
+    }
+
+    // Now perform a short transaction that only reads and updates the issue document.
     const result = await runTransaction(db, async (transaction) => {
+      console.log('[TRACE] occupyIssueTransaction: start transaction for', issueId, 'team', teamName);
       const issueRef = doc(db, COLLECTIONS.ISSUES, issueId);
+
+      const t0 = Date.now();
       const issueDoc = await transaction.get(issueRef);
+      console.log('[TRACE] occupyIssueTransaction: transaction.get(issue) took', Date.now() - t0, 'ms');
 
       if (!issueDoc.exists()) {
         throw new Error('Issue not found');
       }
 
       const issueData = issueDoc.data();
-      
+      console.log('[TRACE] occupyIssueTransaction: issueData=', { id: issueDoc.id, ...issueData });
+
       // Check if issue is already occupied
       if (issueData.status !== 'open') {
         throw new Error(`This issue is already ${issueData.status}. Please choose another issue.`);
       }
 
-      // Check how many issues this team currently has occupied
-      const issuesCol = collection(db, COLLECTIONS.ISSUES);
-      const teamIssuesQuery = query(
-        issuesCol, 
-        where('assignedTo', '==', teamName),
-        where('status', '==', 'occupied')
-      );
-      const teamIssuesSnapshot = await getDocs(teamIssuesQuery);
-
-      if (teamIssuesSnapshot.size >= 3) {
-        throw new Error('Your team has already occupied 3 issues. Please close an issue before occupying a new one.');
-      }
-
-      // All checks passed - occupy the issue
       transaction.update(issueRef, {
         status: 'occupied',
         assignedTo: teamName,
         occupiedAt: Timestamp.fromMillis(Date.now())
       });
 
+      console.log('[TRACE] occupyIssueTransaction: transaction.update queued');
       return { success: true };
     });
 
+    console.log('[TRACE] occupyIssueTransaction: total flow took', Date.now() - start, 'ms');
     return result;
   } catch (error: any) {
     console.error('Error in occupyIssueTransaction:', error);

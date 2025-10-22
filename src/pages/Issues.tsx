@@ -35,15 +35,35 @@ const Issues = () => {
   const closedIssues = useMemo(() => repoIssues.filter(i => i.status === 'closed'), [repoIssues]);
 
   const confirmOccupy = useCallback((issueId: string) => {
+    console.log('[DEBUG] confirmOccupy called for', issueId);
     const issue = issues.find(i => i.id === issueId);
     setSelectedIssue(issueId);
     setSelectedIssueDetails(issue);
     setShowOccupyDialog(true);
   }, [issues]);
 
+  // Prevent double-invocation when using pointer events
+  const makeOneShot = <T extends (...args: any[]) => any>(fn: T) => {
+    let called = false;
+    return ((...args: Parameters<T>) => {
+      if (called) return;
+      called = true;
+      try { return fn(...args); } finally { setTimeout(() => (called = false), 1000); }
+    }) as T;
+  };
+
   const handleOccupy = useCallback(async () => {
+    console.log('[DEBUG] handleOccupy invoked for', selectedIssue);
     if (!selectedIssue) return;
     
+    // Blur focused element to avoid aria-hidden on a focused element (fixes desktop issue)
+    try {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && typeof active.blur === 'function') active.blur();
+    } catch (e) {
+      // ignore in non-browser environments
+    }
+
     // Close dialog first to prevent focus warning
     setShowOccupyDialog(false);
     
@@ -52,6 +72,7 @@ const Issues = () => {
     
     // Occupy issue with transaction (prevents race conditions)
     const result = await occupyIssue(selectedIssue);
+  console.log('[DEBUG] occupyIssue result:', result);
     
     // Dismiss loading toast
     toast.dismiss(loadingToast);
@@ -59,7 +80,9 @@ const Issues = () => {
     // Then show feedback
     if (result.success) {
       toast.success('Issue occupied successfully!');
-      setShowInstructionsDialog(true);
+      // Delay opening the instructions dialog a tick to allow focus to restore and avoid
+      // aria-hidden on focused elements in some desktop layouts.
+      setTimeout(() => setShowInstructionsDialog(true), 50);
     } else {
       toast.error(result.error || 'Failed to occupy issue');
       setSelectedIssue(null);
@@ -74,6 +97,7 @@ const Issues = () => {
   };
 
   const confirmClose = useCallback(() => {
+    console.log('[DEBUG] confirmClose invoked for', selectedIssue);
     if (!selectedIssue) return;
     
     if (!prUrl.trim()) {
@@ -87,6 +111,7 @@ const Issues = () => {
     }
     
     const result = closeIssue(selectedIssue, prUrl);
+  console.log('[DEBUG] closeIssue result:', result);
     if (result.success) {
       toast.success('Issue marked as solved! PR submitted for review 🎉', {
         description: 'Admin will review your PR before awarding points.'
@@ -101,6 +126,7 @@ const Issues = () => {
   }, [selectedIssue, prUrl, closeIssue]);
 
   const handleCloseClick = useCallback((issueId: string) => {
+    console.log('[DEBUG] handleCloseClick for', issueId);
     setSelectedIssue(issueId);
     setPrUrl('');
     setPrUrlError('');
@@ -244,7 +270,8 @@ const Issues = () => {
                   actions={
                     <Button
                       className="w-full"
-                      onClick={() => confirmOccupy(issue.id)}
+                      onPointerUp={() => confirmOccupy(issue.id)}
+                      onClick={(e) => e.preventDefault()}
                     >
                       Occupy Issue
                     </Button>
@@ -269,7 +296,8 @@ const Issues = () => {
                       <Button 
                         className="w-full" 
                         variant="default"
-                        onClick={() => handleCloseClick(issue.id)}
+                        onPointerUp={() => handleCloseClick(issue.id)}
+                        onClick={(e) => e.preventDefault()}
                       >
                         <CheckCircle className="w-4 h-4 mr-2" />
                         Mark as Solved

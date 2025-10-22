@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { Team, Repository, Issue } from '@/types';
 import { toast } from 'sonner';
 import {
@@ -102,6 +102,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     initializeData();
+  }, []);
+
+  // Temporary global pointerdown logger for debugging desktop click interception
+  useEffect(() => {
+    const DEBUG_UI = true;
+    if (!DEBUG_UI) return;
+
+    const onPointerDown = (e: PointerEvent) => {
+      try {
+        const target = e.target as HTMLElement | null;
+        const desc = target ? `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ''}${target.className ? `.${target.className.split(' ').slice(0,3).join('.')}` : ''}` : 'unknown';
+        console.log('[UI-TRACE] pointerdown on', desc);
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      try {
+        const target = e.target as HTMLElement | null;
+        const desc = target ? `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ''}${target.className ? `.${target.className.split(' ').slice(0,3).join('.')}` : ''}` : 'unknown';
+        console.log('[UI-TRACE] pointerup on', desc);
+      } catch (err) {}
+    };
+
+    const onClickCapture = (e: MouseEvent) => {
+      try {
+        const target = e.target as HTMLElement | null;
+        const desc = target ? `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ''}${target.className ? `.${target.className.split(' ').slice(0,3).join('.')}` : ''}` : 'unknown';
+        console.log('[UI-TRACE] click capture on', desc, 'defaultPrevented=', e.defaultPrevented);
+        // log the first few nodes in the composedPath for inspection
+        const path = (e.composedPath && (e.composedPath() as EventTarget[])) || [];
+        if (path.length) {
+          const brief = path.slice(0,5).map(p => {
+            try {
+              const el = p as HTMLElement;
+              return el && el.tagName ? `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${el.className ? `.${(el.className as string).split(' ').slice(0,3).join('.')}` : ''}` : String(p);
+            } catch (err) { return String(p); }
+          });
+          console.log('[UI-TRACE] click path sample:', brief);
+        }
+      } catch (err) {}
+    };
+
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    window.addEventListener('pointerup', onPointerUp, { capture: true });
+    window.addEventListener('click', onClickCapture, { capture: true });
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      window.removeEventListener('pointerup', onPointerUp, { capture: true });
+      window.removeEventListener('click', onClickCapture, { capture: true });
+    };
   }, []);
 
   // Subscribe to real-time updates
@@ -239,9 +291,113 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentTeam) {
       return { success: false, error: 'You must be logged in to occupy an issue.' };
     }
+    console.log('[DEBUG] AppContext.occupyIssue called for', issueId, 'by team', currentTeam.name);
 
-    // Use transaction to prevent race conditions
-    const result = await occupyIssueTransaction(issueId, currentTeam.name);
+    // Avoid running the transaction when the client is offline — Firestore will queue
+    // writes but our UX depends on a quick response, and the logs show net::ERR_INTERNET_DISCONNECTED
+    // causing long waits. Provide clear feedback instead of timing out.
+    if (typeof window !== 'undefined' && !window.navigator.onLine) {
+      console.warn('[DEBUG] Occupy aborted: offline');
+      toast.error('No internet connection — please reconnect and try again.');
+      return { success: false, error: 'No internet connection' };
+    }
+
+    // Fast local pre-checks to avoid starting network transactions when we can
+    // determine the result locally (faster UX and avoids hangs when offline)
+    const issue = issues.find(i => i.id === issueId);
+    if (!issue) {
+      console.warn('[DEBUG] Occupy aborted: issue not found locally for', issueId);
+      return { success: false, error: 'Issue not found.' };
+    }
+
+    if (issue.status !== 'open') {
+      console.warn('[DEBUG] Occupy aborted: issue not open for', issueId, 'status=', issue.status);
+      return { success: false, error: `This issue is already ${issue.status}. Please choose another issue.` };
+    }
+
+    const teamOccupiedCount = issues.filter(i => i.assignedTo === currentTeam.name && i.status === 'occupied').length;
+    if (teamOccupiedCount >= 3) {
+      console.warn('[DEBUG] Occupy aborted: team already has 3 occupied issues for', currentTeam.name);
+      return { success: false, error: 'Your team has already occupied 3 issues. Please close an issue before occupying a new one.' };
+    }
+
+    // Optimistic UI: update local issues immediately so the UI feels snappy
+    // Clone previousIssues to make revert safe against in-place mutations
+    const previousIssues = [...issues];
+    const now = Date.now();
+    setIssues((prev) => prev.map(i => i.id === issueId ? {
+      ...i,
+      status: 'occupied',
+      assignedTo: currentTeam.name,
+      occupiedAt: now
+    } : i));
+
+    // Wrap transaction with a timeout to avoid hanging the UI indefinitely
+    const TIMEOUT_MS = 10000; // 10 seconds
+
+  console.log('[DEBUG] Starting occupyIssueTransaction for', issueId);
+
+  // Try the transaction with a single retry for transient failures
+  const MAX_RETRIES = 1; // one retry
+  let attempt = 0;
+
+  const attemptTransaction = async (): Promise<{ success: boolean; error?: string }> => {
+    while (attempt <= MAX_RETRIES) {
+      attempt += 1;
+      console.log('[DEBUG] occupyIssue: transaction attempt', attempt, 'for', issueId);
+
+      const transactionPromise: Promise<{ success: boolean; error?: string }> = occupyIssueTransaction(issueId, currentTeam.name);
+
+      const wrapped = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
+        const timer = setTimeout(() => {
+          console.warn('[DEBUG] AppContext.occupyIssue timed out for', issueId, 'attempt', attempt);
+          resolve({ success: false, error: 'Transaction timed out. Please try again.' });
+        }, TIMEOUT_MS);
+
+        try {
+          const res = await transactionPromise;
+          clearTimeout(timer);
+          resolve(res);
+        } catch (err: any) {
+          clearTimeout(timer);
+          resolve({ success: false, error: err?.message || 'Transaction failed' });
+        }
+      });
+
+      const res = await wrapped;
+      // If success, or the error is not transient, return immediately
+      if (res.success) return res;
+
+      const errMsg = (res.error || '').toLowerCase();
+      const transientIndicators = ['timed out', 'network', 'transport errored', 'could not reach', 'err_internet_disconnected', 'err_network_changed', 'quic'];
+      const isTransient = transientIndicators.some(ind => errMsg.includes(ind));
+
+      if (!isTransient) {
+        // Non-transient error (e.g., already occupied, team limit) — do not retry
+        return res;
+      }
+
+      if (attempt <= MAX_RETRIES) {
+        // small backoff before retrying
+        const backoff = 500 * attempt;
+        console.log('[DEBUG] occupyIssue: transient failure, backing off', backoff, 'ms before retry for', issueId);
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
+
+    return { success: false, error: 'Transaction failed after retries. Please check your connection and try again.' };
+  };
+
+  const result = await attemptTransaction();
+  console.log('[DEBUG] Finished occupyIssueTransaction for', issueId, 'result=', result);
+    console.log('[DEBUG] AppContext.occupyIssue transaction result for', issueId, result);
+
+    if (!result.success) {
+      // Revert optimistic update on failure
+      console.log('[DEBUG] Reverting optimistic occupy for', issueId);
+      setIssues(previousIssues);
+    }
+
     return result;
   };
 
