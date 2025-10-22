@@ -15,7 +15,8 @@ import {
   updateIssue as updateIssueInDb,
   deleteIssue as deleteIssueFromDb,
   initializeTeams,
-  initializeRepositories
+  initializeRepositories,
+  occupyIssueTransaction
 } from '@/services/firebaseService';
 
 interface AppContextType {
@@ -31,7 +32,7 @@ interface AppContextType {
   addRepository: (repo: Repository) => Promise<void>;
   deleteRepository: (name: string) => Promise<void>;
   addIssue: (issue: Omit<Issue, 'id' | 'status' | 'assignedTo'>) => Promise<void>;
-  occupyIssue: (issueId: string) => { success: boolean; error?: string };
+  occupyIssue: (issueId: string) => Promise<{ success: boolean; error?: string }>;
   closeIssue: (issueId: string, prUrl: string) => { success: boolean; error?: string };
   moveIssue: (issueId: string, status: Issue['status']) => Promise<void>;
   updatePrStatus: (issueId: string, status: 'approved' | 'merged' | 'rejected') => Promise<void>;
@@ -234,30 +235,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     toast.success('Issue added successfully!');
   };
 
-  const occupyIssue = (issueId: string) => {
+  const occupyIssue = async (issueId: string) => {
     if (!currentTeam) {
       return { success: false, error: 'You must be logged in to occupy an issue.' };
     }
 
-    // Check if team already has 3 occupied issues
-    const teamOccupiedCount = issues.filter(
-      i => i.status === 'occupied' && i.assignedTo === currentTeam.name
-    ).length;
-
-    if (teamOccupiedCount >= 3) {
-      return { 
-        success: false, 
-        error: 'Your team has already occupied 3 issues. Please close an issue before occupying a new one.' 
-      };
-    }
-
-    updateIssueInDb(issueId, {
-      status: 'occupied',
-      assignedTo: currentTeam.name,
-      occupiedAt: Date.now()
-    });
-
-    return { success: true };
+    // Use transaction to prevent race conditions
+    const result = await occupyIssueTransaction(issueId, currentTeam.name);
+    return result;
   };
 
   const closeIssue = (issueId: string, prUrl: string) => {

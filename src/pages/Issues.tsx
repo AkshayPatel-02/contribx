@@ -41,25 +41,30 @@ const Issues = () => {
     setShowOccupyDialog(true);
   }, [issues]);
 
-  const handleOccupy = useCallback(() => {
+  const handleOccupy = useCallback(async () => {
     if (!selectedIssue) return;
-    
-    const result = occupyIssue(selectedIssue);
     
     // Close dialog first to prevent focus warning
     setShowOccupyDialog(false);
     
-    // Then show feedback after a brief delay
-    setTimeout(() => {
-      if (result.success) {
-        toast.success('Issue occupied successfully!');
-        setShowInstructionsDialog(true);
-      } else {
-        toast.error(result.error || 'Failed to occupy issue');
-        setSelectedIssue(null);
-        setSelectedIssueDetails(null);
-      }
-    }, 50);
+    // Show loading toast
+    const loadingToast = toast.loading('Occupying issue...');
+    
+    // Occupy issue with transaction (prevents race conditions)
+    const result = await occupyIssue(selectedIssue);
+    
+    // Dismiss loading toast
+    toast.dismiss(loadingToast);
+    
+    // Then show feedback
+    if (result.success) {
+      toast.success('Issue occupied successfully!');
+      setShowInstructionsDialog(true);
+    } else {
+      toast.error(result.error || 'Failed to occupy issue');
+      setSelectedIssue(null);
+      setSelectedIssueDetails(null);
+    }
   }, [selectedIssue, occupyIssue]);
 
   const validatePrUrl = (url: string): boolean => {

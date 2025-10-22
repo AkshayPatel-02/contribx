@@ -2,6 +2,7 @@ import {
   collection, 
   doc, 
   getDocs, 
+  getDoc,
   setDoc, 
   updateDoc, 
   deleteDoc,
@@ -9,7 +10,8 @@ import {
   where,
   onSnapshot,
   writeBatch,
-  Timestamp
+  Timestamp,
+  runTransaction
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { Team, Repository, Issue } from '@/types';
@@ -194,4 +196,63 @@ export const getIssuesByTeam = async (teamName: string): Promise<Issue[]> => {
     id: doc.id,
     ...doc.data() 
   } as Issue));
+};
+
+// ============ TRANSACTIONS ============
+
+/**
+ * Atomically occupy an issue using Firestore transaction
+ * This prevents race conditions when multiple teams try to occupy the same issue
+ */
+export const occupyIssueTransaction = async (
+  issueId: string, 
+  teamName: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      const issueRef = doc(db, COLLECTIONS.ISSUES, issueId);
+      const issueDoc = await transaction.get(issueRef);
+
+      if (!issueDoc.exists()) {
+        throw new Error('Issue not found');
+      }
+
+      const issueData = issueDoc.data();
+      
+      // Check if issue is already occupied
+      if (issueData.status !== 'open') {
+        throw new Error(`This issue is already ${issueData.status}. Please choose another issue.`);
+      }
+
+      // Check how many issues this team currently has occupied
+      const issuesCol = collection(db, COLLECTIONS.ISSUES);
+      const teamIssuesQuery = query(
+        issuesCol, 
+        where('assignedTo', '==', teamName),
+        where('status', '==', 'occupied')
+      );
+      const teamIssuesSnapshot = await getDocs(teamIssuesQuery);
+
+      if (teamIssuesSnapshot.size >= 3) {
+        throw new Error('Your team has already occupied 3 issues. Please close an issue before occupying a new one.');
+      }
+
+      // All checks passed - occupy the issue
+      transaction.update(issueRef, {
+        status: 'occupied',
+        assignedTo: teamName,
+        occupiedAt: Timestamp.fromMillis(Date.now())
+      });
+
+      return { success: true };
+    });
+
+    return result;
+  } catch (error: any) {
+    console.error('Error in occupyIssueTransaction:', error);
+    return { 
+      success: false, 
+      error: error.message || 'Failed to occupy issue. Please try again.' 
+    };
+  }
 };
