@@ -160,26 +160,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isInitialized) return;
 
+    console.log('[DEBUG] Setting up Firestore subscriptions');
+
     const unsubscribeTeams = subscribeToTeams((updatedTeams) => {
+      console.log('[DEBUG] Teams update received:', updatedTeams.length, 'teams');
       setTeams(updatedTeams);
       // Update current team if logged in
       if (currentTeam) {
         const updated = updatedTeams.find(t => t.name === currentTeam.name);
-        if (updated) {
+        if (updated && JSON.stringify(updated) !== JSON.stringify(currentTeam)) {
+          console.log('[DEBUG] Updating current team data');
           setCurrentTeam(updated);
         }
       }
     });
 
-    const unsubscribeRepos = subscribeToRepositories(setRepositories);
-    const unsubscribeIssues = subscribeToIssues(setIssues);
+    const unsubscribeRepos = subscribeToRepositories((updatedRepos) => {
+      console.log('[DEBUG] Repositories update received:', updatedRepos.length, 'repos');
+      setRepositories(updatedRepos);
+    });
+
+    const unsubscribeIssues = subscribeToIssues((updatedIssues) => {
+      console.log('[DEBUG] Issues update received:', updatedIssues.length, 'issues');
+      setIssues(prev => {
+        // Only update if there are actual changes
+        if (JSON.stringify(prev) !== JSON.stringify(updatedIssues)) {
+          console.log('[DEBUG] Updating issues state');
+          return updatedIssues;
+        }
+        return prev;
+      });
+    });
 
     return () => {
+      console.log('[DEBUG] Cleaning up Firestore subscriptions');
       unsubscribeTeams();
       unsubscribeRepos();
       unsubscribeIssues();
     };
-  }, [isInitialized, currentTeam]);
+  }, [isInitialized]); // Remove currentTeam dependency to prevent re-subscribing
 
   // Check for expired issues
   useEffect(() => {
